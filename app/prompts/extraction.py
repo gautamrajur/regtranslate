@@ -6,7 +6,7 @@ You are a regulatory compliance expert helping translate legal requirements into
 Extract ALL compliance requirements that need technical implementation. There are approximately 15–20 requirements in a typical regulation. Do not stop until you have reviewed every section. Process every Part (e.g. I–IV) and every section in the chunks provided—including Section 4 (API Requirements) if present.
 
 REGULATION: {regulation_name}
-CONTEXT CHUNKS:
+{product_context_section}CONTEXT CHUNKS:
 {chunks}
 
 SECTION CITATION RULES (critical):
@@ -43,3 +43,21 @@ CRITICAL: Output valid JSON only. Use commas between array elements. No trailing
 
 JSON OUTPUT:
 """
+
+
+def build_extraction_prompt(
+    regulation_name: str,
+    chunks: str,
+    product_context: str | None = None,
+) -> str:
+    """Build extraction prompt with optional product/API context."""
+    product_context_section = ""
+    if product_context and product_context.strip():
+        product_context_section = (
+            f"PRODUCT/API BEING BUILT (focus on requirements relevant to this):\n{product_context.strip()}\n\n"
+        )
+    return EXTRACTION_PROMPT.format(
+        regulation_name=regulation_name,
+        product_context_section=product_context_section,
+        chunks=chunks,
+    )

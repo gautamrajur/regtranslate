@@ -80,11 +80,21 @@ def _run_process(uploaded_file, regulation_name: str) -> tuple[str | None, int, 
 
 
 def _run_extract(
-    doc_id: str, regulation_name: str, dedupe: bool, return_coverage: bool = True
+    doc_id: str,
+    regulation_name: str,
+    dedupe: bool,
+    return_coverage: bool = True,
+    product_context: str | None = None,
+    rag_query: str | None = None,
 ) -> tuple[list[ExtractionTask] | None, str | None, dict | None]:
     """Returns (tasks, error, coverage). coverage is for Quick Test (pages, sections, Section 4)."""
     try:
-        raw, coverage = task_generator.extract_tasks(doc_id, regulation_name)
+        raw, coverage = task_generator.extract_tasks(
+            doc_id,
+            regulation_name,
+            product_context=product_context,
+            rag_query=rag_query or task_generator.RAG_QUERY,
+        )
         tasks = deduplication.deduplicate(raw) if dedupe and raw else raw
         return tasks, None, coverage if return_coverage else None
     except Exception as e:
@@ -105,8 +115,16 @@ def main() -> None:
     if "extract_coverage" not in st.session_state:
         st.session_state.extract_coverage = None
 
-    page = st.sidebar.radio("Section", ["RegTranslate (PDF → Jira/GitHub)", "Audit (§ 2.2.1 / § 2.2.2)"], key="page")
+    page = st.sidebar.radio(
+        "Section",
+        ["Chat (Product-focused)", "RegTranslate (PDF → Jira/GitHub)", "Audit (§ 2.2.1 / § 2.2.2)"],
+        key="page",
+    )
     _log("Page selected", page=page)
+    if page == "Chat (Product-focused)":
+        _log("Rendering Chat page")
+        _render_chat_page()
+        return
     if page == "Audit (§ 2.2.1 / § 2.2.2)":
         _log("Rendering Audit page")
         _render_audit_page()
@@ -379,6 +397,176 @@ def main() -> None:
 
     st.divider()
     st.caption("RegTranslate · PDF → Embeddings → ChromaDB → RAG + Groq → Jira / GitHub")
+
+
+def _render_chat_page() -> None:
+    """Chat interface: upload doc, describe product/API, pull relevant chunks and create tasks."""
+    st.title("💬 Product-focused extraction")
+    st.caption("Upload a document, describe what you're building — we'll pull relevant chunks and create tasks.")
+
+    if "chat_doc_id" not in st.session_state:
+        st.session_state.chat_doc_id = None
+    if "chat_regulation" not in st.session_state:
+        st.session_state.chat_regulation = "Custom"
+    if "chat_tasks" not in st.session_state:
+        st.session_state.chat_tasks = []
+    if "chat_messages" not in st.session_state:
+        st.session_state.chat_messages = []
+
+    # ---- 1. Document upload ----
+    st.header("1. Upload document")
+    regulation = st.selectbox("Regulation type", REGULATION_OPTIONS, index=4, key="chat_reg_select")
+    regulation_name = regulation if regulation != "Custom" else "Custom"
+    file = st.file_uploader("Upload PDF", type=["pdf"], key="chat_upload")
+    if st.button("Process document", type="primary", disabled=file is None, key="chat_process"):
+        if not file:
+            st.error("Please upload a PDF.")
+            return
+        with st.spinner("Processing PDF…"):
+            doc_id, n, err, _ = _run_process(file, regulation_name)
+        if err:
+            st.error(err)
+            return
+        st.session_state.chat_doc_id = doc_id
+        st.session_state.chat_regulation = regulation_name
+        st.session_state.chat_tasks = []
+        st.session_state.chat_messages = []
+        st.success(f"Processed **{n}** chunks. Describe your product below.")
+        st.rerun()
+
+    if st.session_state.chat_doc_id:
+        st.info(f"**Document ID:** `{st.session_state.chat_doc_id}` · Regulation: **{st.session_state.chat_regulation}**")
+
+    # ---- 2. Describe product / API ----
+    st.header("2. What product or API are you building?")
+    st.markdown("Describe your product in a few sentences. We'll pull relevant compliance chunks and create tasks.")
+    product_desc = st.text_area(
+        "Product / API description",
+        placeholder="e.g. I'm building a patient portal API that handles ePHI, prescriptions, and lab results. It has REST endpoints for CRUD operations and needs to support MFA for clinicians.",
+        height=120,
+        key="chat_product_desc",
+    )
+
+    if st.button("Extract tasks (product-focused)", disabled=not st.session_state.chat_doc_id or not product_desc.strip(), key="chat_extract"):
+        with st.spinner("Pulling relevant chunks and extracting tasks…"):
+            tasks, err, coverage = _run_extract(
+                st.session_state.chat_doc_id,
+                st.session_state.chat_regulation,
+                dedupe=True,
+                return_coverage=True,
+                product_context=product_desc.strip(),
+                rag_query=product_desc.strip(),
+            )
+        if err:
+            st.error(err)
+            return
+        st.session_state.chat_tasks = tasks or []
+        st.success(f"Extracted **{len(st.session_state.chat_tasks)}** tasks from chunks relevant to your product.")
+        st.rerun()
+
+    # ---- 3. Task review ----
+    tasks: list[ExtractionTask] = []
+    for item in st.session_state.chat_tasks:
+        if isinstance(item, ExtractionTask):
+            tasks.append(item if hasattr(item, "subtasks") else ExtractionTask(**{**item.model_dump(), "subtasks": []}))
+        elif isinstance(item, dict):
+            subtasks_data = item.get("subtasks", [])
+            subtasks = [
+                ExtractionSubtask(title=s.get("title", ""), description=s.get("description", ""))
+                if isinstance(s, dict)
+                else ExtractionSubtask(title=getattr(s, "title", ""), description=getattr(s, "description", ""))
+                for s in subtasks_data
+            ]
+            d = {k: v for k, v in item.items() if k != "subtasks"}
+            d["subtasks"] = subtasks
+            tasks.append(ExtractionTask(**d))
+
+    if not tasks:
+        st.divider()
+        st.markdown("**Flow:** Upload PDF → Describe product/API → We retrieve relevant chunks → Extract tasks.")
+        return
+
+    st.header("3. Task review")
+    roles = sorted({t.responsible_role for t in tasks})
+    priorities = ["High", "Medium", "Low"]
+    role_filter = st.multiselect("Filter by role", roles, default=roles, key="chat_role_filter")
+    prio_filter = st.multiselect("Filter by priority", priorities, default=priorities, key="chat_prio_filter")
+    filtered = [t for t in tasks if t.responsible_role in role_filter and t.priority in prio_filter]
+
+    selected: list[ExtractionTask] = []
+    for t in filtered:
+        include = st.checkbox("Include", value=True, key=f"chat_export_{t.task_id}")
+        if include:
+            selected.append(t)
+        also = f" · *Also satisfies: {', '.join(t.also_satisfies)}*" if t.also_satisfies else ""
+        with st.expander(f"[{t.priority}] **{t.title}**{also}", expanded=False):
+            st.markdown(t.description)
+            st.markdown(f"**Source:** {t.source_citation}")
+            if t.acceptance_criteria:
+                st.markdown("**Acceptance criteria:**")
+                for c in t.acceptance_criteria:
+                    st.markdown(f"- {c}")
+            subtasks = getattr(t, "subtasks", None) or []
+            if subtasks:
+                st.markdown("**Subtasks:**")
+                for i, st_sub in enumerate(subtasks, 1):
+                    title = st_sub.title if hasattr(st_sub, "title") else getattr(st_sub, "title", "")
+                    desc = st_sub.description if hasattr(st_sub, "description") else getattr(st_sub, "description", "")
+                    st.markdown(f"- **{i}.** {title}")
+                    if desc:
+                        st.caption(desc)
+            st.caption(f"Role: {t.responsible_role}")
+
+    # ---- 4. Export ----
+    st.header("4. Export to Jira / GitHub")
+    col_j, col_g = st.columns(2)
+    with col_j:
+        st.subheader("Jira")
+        j_url = st.text_input("Jira URL", value=JIRA_URL or "https://your-domain.atlassian.net", key="chat_j_url")
+        j_email = st.text_input("Jira email", value=JIRA_EMAIL or "", key="chat_j_email")
+        j_token = st.text_input("Jira API token", type="password", key="chat_j_token")
+        j_project = st.text_input("Project key", placeholder="PROJ", key="chat_j_project")
+        j_board = st.text_input("Board ID (optional)", key="chat_j_board")
+        j_sprint = st.text_input("Sprint ID (optional)", key="chat_j_sprint")
+        if st.button("Export to Jira", key="chat_jira_btn"):
+            if not selected:
+                st.warning("Select at least one task.")
+            elif not j_project:
+                st.warning("Project key required.")
+            else:
+                try:
+                    sprint_id = int(j_sprint.strip()) if j_sprint and j_sprint.strip().isdigit() else None
+                    board_id = int(j_board.strip()) if j_board and j_board.strip().isdigit() else None
+                    keys = jira_export.export_to_jira(
+                        selected,
+                        j_project,
+                        url=j_url.strip() or None,
+                        email=j_email.strip() or None,
+                        api_token=j_token.strip() or None,
+                        sprint_id=sprint_id,
+                        board_id=board_id,
+                        auto_create_sprint=bool(board_id and not sprint_id),
+                    )
+                    st.success(f"Created: {', '.join(keys)}")
+                except Exception as e:
+                    st.error(str(e))
+    with col_g:
+        st.subheader("GitHub")
+        gh_repo = st.text_input("Repo (owner/name)", key="chat_gh_repo")
+        gh_token = st.text_input("GitHub token", type="password", key="chat_gh_token")
+        if st.button("Export to GitHub", key="chat_gh_btn"):
+            if not selected:
+                st.warning("Select at least one task.")
+            elif not gh_token or not gh_repo:
+                st.warning("GitHub token and repo required.")
+            else:
+                try:
+                    urls = github_export.export_to_github(selected, gh_repo.strip(), gh_token)
+                    st.success(f"Created {len(urls)} issue(s).")
+                    for u in urls[:5]:
+                        st.markdown(f"- {u}")
+                except Exception as e:
+                    st.error(str(e))
 
 
 def _render_audit_page() -> None:

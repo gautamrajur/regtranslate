@@ -10,7 +10,7 @@ from typing import Any
 from app.models.schemas import ExtractionSubtask, ExtractionTask
 
 logger = logging.getLogger(__name__)
-from app.prompts.extraction import EXTRACTION_PROMPT
+from app.prompts.extraction import build_extraction_prompt
 from app.services import embeddings, llm_service, vector_store
 
 # Broad query so Parts I–IV and Section 4 (API) are retrieved; 128K context allows many chunks
@@ -175,6 +175,7 @@ def extract_tasks(
     regulation_name: str,
     rag_query: str = RAG_QUERY,
     n_chunks: int = N_CHUNKS,
+    product_context: str | None = None,
 ) -> tuple[list[ExtractionTask], dict[str, Any]]:
     """
     1. Query vector store for relevant chunks
@@ -198,7 +199,7 @@ def extract_tasks(
     )
 
     chunks_text = _format_chunks(results)
-    prompt = EXTRACTION_PROMPT.format(regulation_name=regulation_name, chunks=chunks_text)
+    prompt = build_extraction_prompt(regulation_name, chunks_text, product_context=product_context)
     messages = [("system", "You output only valid JSON. No markdown or commentary."), ("human", prompt)]
     raw = llm_service.invoke_with_fallback(messages)
 
