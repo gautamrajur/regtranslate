@@ -2,6 +2,53 @@ import type { ExtractionTask, ExtractResponse, ProcessResponse } from './types'
 
 const API_BASE = '/api'
 
+export async function getJiraConfig(): Promise<{ url: string; email: string; api_token: string }> {
+  return fetchApi<{ url: string; email: string; api_token: string }>('/config/jira')
+}
+
+export interface ExportConfig {
+  jira: { url: string; email: string; api_token: string }
+  github: { repo: string; token: string }
+}
+
+export async function getExportConfig(): Promise<ExportConfig> {
+  return fetchApi<ExportConfig>('/config/export')
+}
+
+export interface ExportHistoryEntry {
+  timestamp: string
+  target: 'jira' | 'github'
+  project_key?: string
+  repo?: string
+  keys?: string[]
+  urls?: string[]
+  task_count: number
+  jira_url?: string
+}
+
+export async function getExportHistory(limit?: number): Promise<{ entries: ExportHistoryEntry[] }> {
+  const q = limit != null ? `?limit=${limit}` : ''
+  return fetchApi<{ entries: ExportHistoryEntry[] }>(`/history/export${q}`)
+}
+
+export interface AuditLogEntry {
+  timestamp: string
+  user_id: string
+  action: string
+  resource_accessed: string
+  source_ip: string
+  details: string
+  entry_hash?: string
+}
+
+export async function getAuditLogs(limit?: number, since?: string): Promise<{ entries: AuditLogEntry[] }> {
+  const params = new URLSearchParams()
+  if (limit != null) params.set('limit', String(limit))
+  if (since) params.set('since', since)
+  const q = params.toString() ? `?${params}` : ''
+  return fetchApi<{ entries: AuditLogEntry[] }>(`/audit/logs${q}`)
+}
+
 async function fetchApi<T>(url: string, options?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${url}`, {
     ...options,

@@ -59,6 +59,45 @@ def health():
     return {"status": "ok"}
 
 
+@app.get("/config/jira")
+def get_jira_config():
+    """
+    Return JIRA URL, email, and token from .env for prepopulating the UI.
+    Same source as Streamlit (app.config).
+    """
+    from app.config import JIRA_EMAIL, JIRA_API_TOKEN, JIRA_URL
+    return {
+        "url": JIRA_URL or "https://your-domain.atlassian.net",
+        "email": JIRA_EMAIL or "",
+        "api_token": JIRA_API_TOKEN or "",
+    }
+
+
+@app.get("/config/export")
+def get_export_config():
+    """
+    Return Jira and GitHub config from .env for prepopulating the export UI.
+    """
+    from app.config import (
+        GITHUB_REPO,
+        GITHUB_TOKEN,
+        JIRA_EMAIL,
+        JIRA_API_TOKEN,
+        JIRA_URL,
+    )
+    return {
+        "jira": {
+            "url": JIRA_URL or "https://your-domain.atlassian.net",
+            "email": JIRA_EMAIL or "",
+            "api_token": JIRA_API_TOKEN or "",
+        },
+        "github": {
+            "repo": GITHUB_REPO or "",
+            "token": GITHUB_TOKEN or "",
+        },
+    }
+
+
 @app.post("/process", response_model=ProcessResponse)
 async def process_document(
     file: UploadFile = File(...),
@@ -227,6 +266,8 @@ def export_to_jira_endpoint(req: JiraExportRequest) -> JiraExportResponse:
             auto_create_sprint=req.auto_create_sprint,
             assignee_overrides=req.assignee_overrides,
         )
+        from app.services import export_history
+        export_history.append_jira(req.project_key, keys, len(tasks), url=req.url)
         return JiraExportResponse(keys=keys)
     except ValueError as e:
         raise HTTPException(422, str(e))
@@ -264,11 +305,23 @@ def export_to_github_endpoint(req: GitHubExportRequest) -> GitHubExportResponse:
         )
     try:
         urls = github_export.export_to_github(tasks, req.repo, req.token)
+        from app.services import export_history
+        export_history.append_github(req.repo, urls, len(tasks))
         return GitHubExportResponse(urls=urls)
     except ValueError as e:
         raise HTTPException(422, str(e))
     except Exception as e:
         raise HTTPException(500, f"GitHub export failed: {e}")
+
+
+# --- Export history ---
+
+
+@app.get("/history/export")
+def get_export_history(limit: int = 100):
+    """List history of created Jira tickets and GitHub issues."""
+    from app.services import export_history
+    return {"entries": export_history.list_entries(limit=limit)}
 
 
 # --- § 2.2.1 Audit logging; § 2.2.2 = review/alerting ---

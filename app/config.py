@@ -30,6 +30,10 @@ JIRA_ASSIGNEE_SECURITY = os.getenv("JIRA_ASSIGNEE_SECURITY", "").strip()
 # Sprint: field ID (e.g. customfield_10020 for JIRA Cloud) and sprint ID for board visibility
 JIRA_SPRINT_FIELD_ID = os.getenv("JIRA_SPRINT_FIELD_ID", "customfield_10020").strip()
 
+# GitHub (optional; for prepopulating export UI)
+GITHUB_REPO = os.getenv("GITHUB_REPO", "").strip()
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "").strip()
+
 CHROMA_PERSIST_DIR = Path(os.getenv("CHROMA_PERSIST_DIR", "./chroma_db"))
 CHROMA_PERSIST_DIR.mkdir(parents=True, exist_ok=True)
 

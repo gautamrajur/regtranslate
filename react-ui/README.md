@@ -25,6 +25,8 @@ npm run dev
 
 Open http://localhost:5173. The Vite dev server proxies `/api` requests to the FastAPI backend.
 
+**Prepopulated credentials:** Add `JIRA_URL`, `JIRA_EMAIL`, `JIRA_API_TOKEN` (and optionally `GITHUB_REPO`, `GITHUB_TOKEN`) to your `.env` in the project root. The export form will prepopulate these values. Restart the API after changing `.env`.
+
 ## Build
 
 ```bash

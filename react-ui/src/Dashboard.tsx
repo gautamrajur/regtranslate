@@ -1,0 +1,1204 @@
+import { useState, useEffect, useCallback } from 'react'
+import {
+  FileText,
+  Upload,
+  Play,
+  Sparkles,
+  Send,
+  ChevronDown,
+  Pencil,
+  Check,
+  X,
+  Loader2,
+  CheckCircle2,
+  XCircle,
+  Info,
+  FileCode,
+  Github,
+  Menu,
+  History,
+  ExternalLink,
+  Moon,
+  Sun,
+  Copy,
+  Search,
+  Download,
+  Plus,
+  ShieldCheck,
+} from 'lucide-react'
+import { Link } from 'react-router-dom'
+import { processDocument, extractTasks, exportToJira, exportToGitHub, getExportConfig, getExportHistory, getAuditLogs } from './api'
+import type { ExtractionTask } from './types'
+import { Tooltip } from './Tooltip'
+import { useTheme } from './useTheme'
+import './App.css'
+
+const REGULATION_OPTIONS = ['HIPAA', 'GDPR', 'ADA/WCAG', 'FDA 21 CFR Part 11', 'Custom']
+
+const PROMPT_SUGGESTIONS = [
+  'Patient portal API with ePHI, MFA, audit logging',
+  'SaaS B2B app with user data, EU customers (GDPR)',
+  'Medical device software, FDA 21 CFR Part 11, electronic records',
+  'Public-facing web app, ADA/WCAG accessibility required',
+  'Healthcare mobile app with PHI, HIPAA compliance',
+]
+
+const TASK_TEMPLATES = [
+  { title: 'Security review', description: 'Review and document security controls', priority: 'High' as const, acceptance_criteria: ['Document current controls', 'Identify gaps', 'Create remediation plan'] },
+  { title: 'Accessibility audit', description: 'Audit for ADA/WCAG compliance', priority: 'Medium' as const, acceptance_criteria: ['Run automated tests', 'Manual keyboard nav', 'Screen reader testing'] },
+  { title: 'Audit logging', description: 'Implement audit trail for sensitive operations', priority: 'High' as const, acceptance_criteria: ['Log access events', 'Immutable storage', 'Retention policy'] },
+]
+
+const EXPORT_PRESETS_KEY = 'regtranslate-export-presets'
+
+interface ExportPreset {
+  name: string
+  jira?: { url?: string; email?: string; token?: string; project?: string; board?: string; sprint?: string; autoSprint?: boolean }
+  github?: { repo?: string; token?: string }
+}
+
+export function Dashboard() {
+  const [docId, setDocId] = useState<string | null>(null)
+  const [regulationName, setRegulationName] = useState('Custom')
+  const [tasks, setTasks] = useState<ExtractionTask[]>([])
+  type LoadingState = 'process' | 'extract' | 'jira' | 'github' | null
+  const [loading, setLoading] = useState<LoadingState>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [success, setSuccess] = useState<string | null>(null)
+
+  const [selectedFile, setSelectedFile] = useState<File | null>(null)
+  const setFiles = (files: FileList | null) => {
+    const arr = files ? Array.from(files) : []
+    setSelectedFiles(arr)
+    setSelectedFile(arr[0] ?? null)
+  }
+  const [dedupe, setDedupe] = useState(true)
+  const [productContext, setProductContext] = useState('')
+  const [selectedTasks, setSelectedTasks] = useState<Set<string>>(new Set())
+
+  const [jiraUrl, setJiraUrl] = useState('https://your-domain.atlassian.net')
+  const [jiraEmail, setJiraEmail] = useState('')
+  const [jiraToken, setJiraToken] = useState('')
+  const [jiraProject, setJiraProject] = useState('')
+  const [jiraBoard, setJiraBoard] = useState('')
+  const [jiraSprint, setJiraSprint] = useState('')
+  const [jiraAutoSprint, setJiraAutoSprint] = useState(true)
+  const [ghRepo, setGhRepo] = useState('')
+  const [ghToken, setGhToken] = useState('')
+  const [customRegulation, setCustomRegulation] = useState('')
+  const [taskSearch, setTaskSearch] = useState('')
+  const [taskFilterPriority, setTaskFilterPriority] = useState<string>('')
+  const [taskFilterConfidence, setTaskFilterConfidence] = useState<string>('')
+  const { theme, toggleTheme } = useTheme()
+  const [page, setPage] = useState<'main' | 'history' | 'audit'>('main')
+  const [auditEntries, setAuditEntries] = useState<Array<{ timestamp: string; user_id: string; action: string; resource_accessed: string; source_ip: string; details: string }>>([])
+  const [auditLoading, setAuditLoading] = useState(false)
+  const [selectedFiles, setSelectedFiles] = useState<File[]>([])
+  const [coverage, setCoverage] = useState<{ chunk_count: number; pages_summary: string; sections: string[]; section_4_in_chunks: boolean } | null>(null)
+
+  useEffect(() => {
+    getExportConfig()
+      .then(({ jira, github }) => {
+        if (jira.url) setJiraUrl(jira.url)
+        if (jira.email) setJiraEmail(jira.email)
+        if (jira.api_token) setJiraToken(jira.api_token)
+        if (github.repo) setGhRepo(github.repo)
+        if (github.token) setGhToken(github.token)
+      })
+      .catch(() => {})
+  }, [])
+  const [sidebarOpen, setSidebarOpen] = useState(false)
+  const [historyEntries, setHistoryEntries] = useState<Array<{ timestamp: string; target: string; project_key?: string; repo?: string; keys?: string[]; urls?: string[]; task_count: number; jira_url?: string }>>([])
+  const [historyLoading, setHistoryLoading] = useState(false)
+
+  const loadHistory = () => {
+    setHistoryLoading(true)
+    getExportHistory(100)
+      .then(({ entries }) => setHistoryEntries(entries))
+      .catch(() => setHistoryEntries([]))
+      .finally(() => setHistoryLoading(false))
+  }
+
+  const loadAudit = () => {
+    setAuditLoading(true)
+    getAuditLogs(100)
+      .then(({ entries }) => setAuditEntries(entries))
+      .catch(() => setAuditEntries([]))
+      .finally(() => setAuditLoading(false))
+  }
+
+  const saveExportPreset = () => {
+    const preset = {
+      name: `Preset ${new Date().toISOString().slice(0, 16)}`,
+      jira: { url: jiraUrl, email: jiraEmail, token: jiraToken, project: jiraProject, board: jiraBoard, sprint: jiraSprint, autoSprint: jiraAutoSprint },
+      github: { repo: ghRepo, token: ghToken },
+    }
+    const presets = JSON.parse(localStorage.getItem(EXPORT_PRESETS_KEY) || '[]')
+    presets.push(preset)
+    localStorage.setItem(EXPORT_PRESETS_KEY, JSON.stringify(presets))
+    setSuccess('Export preset saved')
+  }
+
+  const loadExportPreset = (idx: number) => {
+    const presets = JSON.parse(localStorage.getItem(EXPORT_PRESETS_KEY) || '[]')
+    const p = presets[idx]
+    if (p) {
+      if (p.jira) {
+        setJiraUrl(p.jira.url || '')
+        setJiraEmail(p.jira.email || '')
+        setJiraToken(p.jira.token || '')
+        setJiraProject(p.jira.project || '')
+        setJiraBoard(p.jira.board || '')
+        setJiraSprint(p.jira.sprint || '')
+        setJiraAutoSprint(p.jira.autoSprint ?? true)
+      }
+      if (p.github) {
+        setGhRepo(p.github.repo || '')
+        setGhToken(p.github.token || '')
+      }
+      setSuccess('Preset loaded')
+    }
+  }
+
+  const getExportPresets = (): ExportPreset[] => JSON.parse(localStorage.getItem(EXPORT_PRESETS_KEY) || '[]')
+
+  const selectAllTasks = () => setSelectedTasks(new Set(tasks.map((t) => t.task_id)))
+  const deselectAllTasks = () => setSelectedTasks(new Set())
+  const selectHighPriority = () => setSelectedTasks(new Set(tasks.filter((t) => t.priority === 'High').map((t) => t.task_id)))
+
+  const addManualTask = (template?: (typeof TASK_TEMPLATES)[0]) => {
+    const id = `manual-${Date.now()}`
+    const t = template
+      ? {
+          task_id: id,
+          title: template.title,
+          description: template.description,
+          priority: template.priority,
+          penalty_risk: '',
+          source_citation: 'Manual',
+          source_text: '',
+          responsible_role: 'Engineer',
+          acceptance_criteria: template.acceptance_criteria,
+          also_satisfies: [],
+          subtasks: [],
+        }
+      : {
+          task_id: id,
+          title: 'New task',
+          description: '',
+          priority: 'Medium' as const,
+          penalty_risk: '',
+          source_citation: 'Manual',
+          source_text: '',
+          responsible_role: 'Engineer',
+          acceptance_criteria: [],
+          also_satisfies: [],
+          subtasks: [],
+        }
+    setTasks((prev) => [...prev, t])
+    setSelectedTasks((prev) => new Set([...prev, id]))
+  }
+
+  const exportToCsv = () => {
+    const toExport = tasks.filter((t) => selectedTasks.has(t.task_id))
+    if (!toExport.length) return
+    const headers = ['Title', 'Description', 'Priority', 'Source', 'Role', 'Acceptance Criteria', 'Subtasks']
+    const rows = toExport.map((t) => [
+      t.title,
+      t.description,
+      t.priority,
+      t.source_citation,
+      t.responsible_role,
+      (t.acceptance_criteria ?? []).join('; '),
+      (t.subtasks ?? []).map((s) => `${s?.title}: ${s?.description}`).join('; '),
+    ])
+    const csv = [headers.join(','), ...rows.map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(','))].join('\n')
+    const blob = new Blob([csv], { type: 'text/csv' })
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(blob)
+    a.download = `regtranslate-tasks-${new Date().toISOString().slice(0, 10)}.csv`
+    a.click()
+    URL.revokeObjectURL(a.href)
+    setSuccess(`Exported ${toExport.length} tasks to CSV`)
+  }
+
+  const copyTaskAsMarkdown = useCallback((task: ExtractionTask) => {
+    const ac = (task.acceptance_criteria ?? []).map((c) => `- ${c}`).join('\n')
+    const subs = (task.subtasks ?? []).map((s) => `- **${s?.title}**: ${s?.description}`).join('\n')
+    const md = `## ${task.title}\n\n${task.description}\n\n**Priority:** ${task.priority} | **Source:** ${task.source_citation}\n\n### Acceptance criteria\n${ac || '- (none)'}\n\n### Subtasks\n${subs || '- (none)'}`
+    navigator.clipboard.writeText(md)
+    setSuccess('Copied to clipboard')
+  }, [])
+
+  const filteredTasks = tasks.filter((t) => {
+    if (taskSearch && !t.title.toLowerCase().includes(taskSearch.toLowerCase()) && !t.description.toLowerCase().includes(taskSearch.toLowerCase())) return false
+    if (taskFilterPriority && t.priority !== taskFilterPriority) return false
+    if (taskFilterConfidence === 'high' && (t.confidence == null || t.confidence < 80)) return false
+    if (taskFilterConfidence === 'low' && (t.confidence != null && t.confidence >= 80)) return false
+    return true
+  })
+
+  useEffect(() => {
+    const h = (e: KeyboardEvent) => {
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
+      if (e.key === 'e' && (e.metaKey || e.ctrlKey) && e.shiftKey) {
+        e.preventDefault()
+        if (docId && !loading) handleExtract()
+      }
+      if (e.key === 's' && (e.metaKey || e.ctrlKey) && e.shiftKey) {
+        e.preventDefault()
+        if (tasks.length && selectedTasks.size && jiraProject) handleExportJira()
+      }
+    }
+    window.addEventListener('keydown', h)
+    return () => window.removeEventListener('keydown', h)
+  }, [docId, loading, tasks.length, selectedTasks.size, jiraProject])
+
+  const clearMessages = () => {
+    setError(null)
+    setSuccess(null)
+  }
+
+  const effectiveRegulation = regulationName === 'Custom' && customRegulation.trim() ? customRegulation.trim() : regulationName
+
+  const handleUpload = async () => {
+    const files = selectedFiles.length ? selectedFiles : (selectedFile ? [selectedFile] : [])
+    if (!files.length) return
+    clearMessages()
+    setLoading('process')
+    try {
+      let lastRes: { doc_id: string; chunk_count: number; regulation_name: string }
+      for (let i = 0; i < files.length; i++) {
+        const res = await processDocument(files[i], effectiveRegulation)
+        lastRes = res
+        if (i < files.length - 1) setSuccess(`Processed ${res.chunk_count} chunks from ${files[i].name}. Next...`)
+      }
+      if (lastRes!) {
+        setDocId(lastRes.doc_id)
+        setRegulationName(lastRes.regulation_name)
+        setTasks([])
+        setSuccess(`Processed ${files.length} file(s). Ready for extraction.`)
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Processing failed')
+    } finally {
+      setLoading(null)
+    }
+  }
+
+  const handleExtract = async () => {
+    if (!docId) return
+    clearMessages()
+    setLoading('extract')
+    try {
+      const res = await extractTasks({
+        doc_id: docId,
+        regulation_name: effectiveRegulation,
+        dedupe,
+        return_coverage: true,
+        product_context: productContext.trim() || null,
+        rag_query: productContext.trim() || null,
+      })
+      const normalized = (res.tasks ?? []).map((t) => ({
+        ...t,
+        acceptance_criteria: t.acceptance_criteria ?? [],
+        subtasks: t.subtasks ?? [],
+      }))
+      setTasks(normalized)
+      setSelectedTasks(new Set(normalized.map((t) => t.task_id ?? '').filter(Boolean)))
+      setCoverage(res.coverage ?? null)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Extraction failed')
+    } finally {
+      setLoading(null)
+    }
+  }
+
+  const toggleTask = (taskId: string) => {
+    setSelectedTasks((prev) => {
+      const next = new Set(prev)
+      if (next.has(taskId)) next.delete(taskId)
+      else next.add(taskId)
+      return next
+    })
+  }
+
+  const updateTask = (taskId: string, updates: Partial<ExtractionTask>) => {
+    setTasks((prev) =>
+      prev.map((t) => (t.task_id === taskId ? { ...t, ...updates } : t))
+    )
+  }
+
+  const handleExportJira = async () => {
+    const toExport = tasks.filter((t) => selectedTasks.has(t.task_id))
+    if (!toExport.length || !jiraProject) {
+      setError('Select at least one task and provide project key.')
+      return
+    }
+    clearMessages()
+    setLoading('jira')
+    try {
+      const res = await exportToJira({
+        tasks: toExport,
+        project_key: jiraProject,
+        url: jiraUrl || null,
+        email: jiraEmail || null,
+        api_token: jiraToken || null,
+        sprint_id: jiraSprint ? parseInt(jiraSprint, 10) : null,
+        board_id: jiraBoard ? parseInt(jiraBoard, 10) : null,
+        auto_create_sprint: jiraAutoSprint && !jiraSprint && !!jiraBoard,
+      })
+      setSuccess(`Created: ${res.keys.join(', ')}`)
+      loadHistory()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Jira export failed')
+    } finally {
+      setLoading(null)
+    }
+  }
+
+  const handleExportGitHub = async () => {
+    const toExport = tasks.filter((t) => selectedTasks.has(t.task_id))
+    if (!toExport.length || !ghRepo || !ghToken) {
+      setError('Select at least one task and provide repo + token.')
+      return
+    }
+    clearMessages()
+    setLoading('github')
+    try {
+      const res = await exportToGitHub({
+        tasks: toExport,
+        repo: ghRepo,
+        token: ghToken,
+      })
+      setSuccess(`Created ${res.urls.length} issue(s).`)
+      loadHistory()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'GitHub export failed')
+    } finally {
+      setLoading(null)
+    }
+  }
+
+  return (
+    <div className="app">
+      {(loading === 'jira' || loading === 'github') && (
+        <div className="loading-overlay" role="status" aria-live="polite">
+          <div className="loading-overlay-content">
+            <Loader2 size={48} className="spinner" strokeWidth={2} />
+            <h3 className="loading-overlay-title">
+              {loading === 'jira' ? 'Creating Jira tickets…' : 'Creating GitHub issues…'}
+            </h3>
+            <p className="loading-overlay-desc">
+              {loading === 'jira'
+                ? 'This may take a minute. Please wait.'
+                : 'This may take a moment. Please wait.'}
+            </p>
+          </div>
+        </div>
+      )}
+
+      <header className="mobile-header">
+        <Link to="/" className="mobile-header-brand">
+          <FileText size={22} strokeWidth={2} />
+          RegTranslate
+        </Link>
+        <Tooltip content="Open navigation menu">
+        <button
+          className="menu-toggle"
+          onClick={() => setSidebarOpen(true)}
+          aria-label="Open menu"
+        >
+          <Menu size={24} />
+        </button>
+        </Tooltip>
+      </header>
+
+      <div
+        className={`sidebar-backdrop ${sidebarOpen ? 'open' : ''}`}
+        onClick={() => setSidebarOpen(false)}
+        aria-hidden="true"
+      />
+
+      <aside className={`sidebar ${sidebarOpen ? 'open' : ''}`}>
+        <div className="sidebar-brand" style={{ justifyContent: 'space-between' }}>
+          <Link to="/" style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
+            <FileText size={24} strokeWidth={2} />
+            RegTranslate
+          </Link>
+          <button
+            className="menu-toggle"
+            onClick={() => setSidebarOpen(false)}
+            aria-label="Close menu"
+          >
+            <X size={20} />
+          </button>
+        </div>
+        <nav className="sidebar-nav">
+          <a
+            href="#"
+            className={page === 'main' ? 'active' : ''}
+            onClick={(e) => { e.preventDefault(); setPage('main'); setSidebarOpen(false); }}
+          >
+            <FileCode size={16} />
+            PDF → Jira / GitHub
+          </a>
+          <a
+            href="#"
+            className={page === 'history' ? 'active' : ''}
+            onClick={(e) => { e.preventDefault(); setPage('history'); loadHistory(); setSidebarOpen(false); }}
+          >
+            <History size={16} />
+            History
+          </a>
+          <a
+            href="#"
+            className={page === 'audit' ? 'active' : ''}
+            onClick={(e) => { e.preventDefault(); setPage('audit'); loadAudit(); setSidebarOpen(false); }}
+          >
+            <ShieldCheck size={16} />
+            Audit trail
+          </a>
+          <Tooltip content={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}>
+            <button
+              type="button"
+              className="theme-toggle"
+              onClick={toggleTheme}
+              aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
+            >
+              {theme === 'dark' ? <Sun size={18} /> : <Moon size={18} />}
+            </button>
+          </Tooltip>
+        </nav>
+      </aside>
+
+      <main className="main">
+        <div className="main-inner">
+          {page === 'audit' ? (
+            <AuditPage entries={auditEntries} loading={auditLoading} onRefresh={loadAudit} />
+          ) : page === 'history' ? (
+            <HistoryPage
+              entries={historyEntries}
+              loading={historyLoading}
+              onRefresh={loadHistory}
+            />
+          ) : (
+          <>
+          <header className="main-header">
+            <h1>RegTranslate</h1>
+            <p>Regulatory PDF → Developer tasks → Jira / GitHub</p>
+          </header>
+
+          {error && (
+          <div className="alert alert-error" role="alert">
+            <XCircle size={18} />
+            {error}
+          </div>
+        )}
+        {success && (
+          <div className="alert alert-success" role="status">
+            <CheckCircle2 size={18} />
+            {success}
+          </div>
+        )}
+        {loading && loading !== 'jira' && loading !== 'github' && (
+          <div className="alert alert-info" role="status">
+            <Loader2 size={18} className="spinner" />
+            {loading === 'process' && 'Processing PDF…'}
+            {loading === 'extract' && 'Extracting tasks…'}
+          </div>
+        )}
+
+          <div className="pipeline-row">
+            <section className="step">
+              <div className="step-header compact">
+                <span className="step-number">1</span>
+                <h2 className="step-title">Upload</h2>
+              </div>
+              <div className="card">
+                <div className="input-group">
+                  <Tooltip content="Select the regulation framework for your document (e.g. HIPAA, GDPR)">
+                    <label htmlFor="regulation">Regulation type</label>
+                  </Tooltip>
+                  <select
+                    id="regulation"
+                    value={regulationName}
+                    onChange={(e) => setRegulationName(e.target.value)}
+                    aria-label="Regulation type"
+                  >
+                    {REGULATION_OPTIONS.map((r) => (
+                      <option key={r} value={r === 'Custom' ? 'Custom' : r}>
+                        {r}
+                      </option>
+                    ))}
+                  </select>
+                  {regulationName === 'Custom' && (
+                    <input
+                      type="text"
+                      placeholder="e.g. SOC 2, ISO 27001"
+                      value={customRegulation}
+                      onChange={(e) => setCustomRegulation(e.target.value)}
+                      style={{ marginTop: 'var(--space-2)' }}
+                    />
+                  )}
+                </div>
+                <Tooltip content="Upload a regulatory PDF document to process">
+                <div
+                  className={`upload-zone ${selectedFiles.length || selectedFile ? 'has-file' : ''}`}
+                  onClick={() => document.getElementById('file-input')?.click()}
+                  onKeyDown={(e) => e.key === 'Enter' && document.getElementById('file-input')?.click()}
+                  role="button"
+                  tabIndex={0}
+                  aria-label="Upload PDF file"
+                >
+                  <input
+                    id="file-input"
+                    type="file"
+                    accept=".pdf"
+                    multiple
+                    onChange={(e) => setFiles(e.target.files)}
+                  />
+                  <div className="upload-zone-content">
+                    <Upload size={28} strokeWidth={1.5} />
+                    {selectedFiles.length > 0 || selectedFile ? (
+                      <>
+                        <span>{selectedFiles.length > 1 ? `${selectedFiles.length} files` : (selectedFiles[0] || selectedFile)?.name}</span>
+                        <span style={{ fontSize: 'var(--text-xs)' }}>Click to change</span>
+                      </>
+                    ) : (
+                      <>
+                        <span>Drop PDF(s) or click</span>
+                        <span>Accepts .pdf · Multiple files for batch</span>
+                      </>
+                    )}
+                  </div>
+                </div>
+                </Tooltip>
+                <div className="card-actions">
+                  <Tooltip content="Process the PDF and prepare chunks for extraction">
+                  <button
+                    className="btn btn-primary"
+                    onClick={handleUpload}
+                    disabled={(!selectedFiles.length && !selectedFile) || !!loading}
+                    aria-busy={!!loading}
+                  >
+                    {loading === 'process' ? <Loader2 size={16} className="spinner" /> : <Play size={16} />}
+                    Process
+                  </button>
+                  </Tooltip>
+                </div>
+              </div>
+            </section>
+
+            <section className="step">
+              <div className="step-header compact">
+                <span className="step-number">2</span>
+                <h2 className="step-title">Extract</h2>
+              </div>
+              <div className="card">
+                <Tooltip content="Merge duplicate tasks across regulations">
+                <label className="checkbox-row">
+                  <input type="checkbox" checked={dedupe} onChange={(e) => setDedupe(e.target.checked)} />
+                  Deduplicate across regulations
+                </label>
+                </Tooltip>
+                <div className="input-group">
+                  <Tooltip content="Describe your product for focused task extraction">
+                  <label htmlFor="product-context">Product context (optional)</label>
+                  </Tooltip>
+                  <textarea
+                    id="product-context"
+                    placeholder="e.g. Patient portal API with ePHI, MFA..."
+                    value={productContext}
+                    onChange={(e) => setProductContext(e.target.value)}
+                    rows={2}
+                    aria-describedby="product-context-hint"
+                  />
+                  <div className="prompt-suggestions">
+                    <span className="prompt-suggestions-label">Suggestions:</span>
+                    {PROMPT_SUGGESTIONS.map((s, i) => (
+                      <button
+                        key={i}
+                        type="button"
+                        className="prompt-suggestion-chip"
+                        onClick={() => setProductContext(s)}
+                      >
+                        {s}
+                      </button>
+                    ))}
+                  </div>
+                  <span id="product-context-hint" style={{ fontSize: 'var(--text-xs)', color: 'var(--text-tertiary)', marginTop: 'var(--space-1)' }}>
+                    Describe your product for focused extraction
+                  </span>
+                </div>
+                <div className="card-actions">
+                  <Tooltip content="Extract compliance tasks using RAG + LLM">
+                  <button
+                    className="btn btn-primary"
+                    onClick={handleExtract}
+                    disabled={!docId || !!loading}
+                    aria-busy={!!loading}
+                  >
+                    {loading === 'extract' ? <Loader2 size={16} className="spinner" /> : <Sparkles size={16} />}
+                    Extract tasks
+                  </button>
+                  </Tooltip>
+                </div>
+              </div>
+            </section>
+          </div>
+
+          {docId && (
+            <div className="alert alert-info" role="status">
+              <Info size={18} />
+              <span>
+                Document ID: <code style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-xs)' }}>{docId}</code>
+                {' · '}Regulation: {regulationName}
+              </span>
+            </div>
+          )}
+
+          {coverage && tasks.length > 0 && (
+            <div className="compliance-checklist card">
+              <h3 className="compliance-checklist-title">Compliance coverage</h3>
+              <ul className="compliance-checklist-list">
+                <li><strong>Chunks:</strong> {coverage.chunk_count}</li>
+                <li><strong>Pages:</strong> {coverage.pages_summary}</li>
+                <li><strong>Section 4 in RAG:</strong> {coverage.section_4_in_chunks ? 'Yes' : 'No'}</li>
+                {coverage.sections.length > 0 && (
+                  <li><strong>Sections:</strong> {coverage.sections.slice(0, 10).join(', ')}{coverage.sections.length > 10 ? '…' : ''}</li>
+                )}
+              </ul>
+            </div>
+          )}
+
+        {tasks.length > 0 && (
+          <section className="step">
+            <div className="step-header" style={{ flexWrap: 'wrap', gap: 'var(--space-4)' }}>
+              <span className="step-number">3</span>
+              <h2 className="step-title">Task review</h2>
+              <div className="task-review-actions">
+                <div className="task-search-row">
+                  <Search size={16} />
+                  <input
+                    type="search"
+                    placeholder="Search tasks..."
+                    value={taskSearch}
+                    onChange={(e) => setTaskSearch(e.target.value)}
+                    className="task-search-input"
+                  />
+                  <select value={taskFilterPriority} onChange={(e) => setTaskFilterPriority(e.target.value)} className="task-filter-select">
+                    <option value="">All priorities</option>
+                    <option value="High">High</option>
+                    <option value="Medium">Medium</option>
+                    <option value="Low">Low</option>
+                  </select>
+                  <select value={taskFilterConfidence} onChange={(e) => setTaskFilterConfidence(e.target.value)} className="task-filter-select">
+                    <option value="">All confidence</option>
+                    <option value="high">High (≥80%)</option>
+                    <option value="low">Low (&lt;80%)</option>
+                  </select>
+                </div>
+                <div className="bulk-select-row">
+                  <button type="button" className="btn btn-ghost btn-sm" onClick={selectAllTasks}>Select all</button>
+                  <button type="button" className="btn btn-ghost btn-sm" onClick={deselectAllTasks}>Deselect all</button>
+                  <button type="button" className="btn btn-ghost btn-sm" onClick={selectHighPriority}>High priority only</button>
+                </div>
+                <div className="add-task-row">
+                  <button type="button" className="btn btn-secondary btn-sm" onClick={() => addManualTask()}>
+                    <Plus size={14} />
+                    Add task
+                  </button>
+                  <div className="task-templates-dropdown">
+                    {TASK_TEMPLATES.map((tpl, i) => (
+                      <button key={i} type="button" className="btn btn-ghost btn-sm" onClick={() => addManualTask(tpl)}>
+                        {tpl.title}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
+            <p className="step-desc">Select tasks to export. Edit before exporting if needed. Ctrl+Shift+E: Extract · Ctrl+Shift+S: Export Jira</p>
+            <div className="task-list">
+              {filteredTasks.map((task) => (
+                <TaskCard
+                  key={task.task_id}
+                  task={task}
+                  selected={selectedTasks.has(task.task_id)}
+                  onToggle={() => toggleTask(task.task_id)}
+                  onUpdate={(updates) => updateTask(task.task_id, updates)}
+                  onCopyMarkdown={() => copyTaskAsMarkdown(task)}
+                />
+              ))}
+            </div>
+            {filteredTasks.length === 0 && tasks.length > 0 && (
+              <p style={{ color: 'var(--text-tertiary)', fontSize: 'var(--text-sm)' }}>No tasks match your filters.</p>
+            )}
+          </section>
+        )}
+
+          {tasks.length > 0 && (
+            <section className="step">
+              <div className="step-header">
+                <span className="step-number">4</span>
+                <h2 className="step-title">Export</h2>
+              </div>
+              <div className="export-presets-row">
+                <button type="button" className="btn btn-ghost btn-sm" onClick={saveExportPreset}>Save preset</button>
+                {getExportPresets().length > 0 && (
+                  <select
+                    className="preset-select"
+                    onChange={(e) => { const v = e.target.value; if (v !== '') loadExportPreset(parseInt(v, 10)); e.target.value = ''; }}
+                  >
+                    <option value="">Load preset...</option>
+                    {getExportPresets().map((p, i) => (
+                      <option key={i} value={i}>{p.name}</option>
+                    ))}
+                  </select>
+                )}
+                <Tooltip content="Export selected tasks to CSV">
+                  <button type="button" className="btn btn-secondary btn-sm" onClick={exportToCsv}>
+                    <Download size={14} />
+                    Export CSV
+                  </button>
+                </Tooltip>
+              </div>
+              <div className="export-grid">
+              <div className="export-panel">
+                <div className="export-panel-header">
+                  <FileCode size={18} />
+                  Jira
+                </div>
+                <div className="input-group">
+                  <Tooltip content="Your Atlassian Jira instance URL">
+                  <label htmlFor="jira-url">URL</label>
+                  </Tooltip>
+                  <input id="jira-url" type="text" value={jiraUrl} onChange={(e) => setJiraUrl(e.target.value)} placeholder="https://your-domain.atlassian.net" />
+                </div>
+                <div className="input-group">
+                  <Tooltip content="Email used for Jira API authentication">
+                  <label htmlFor="jira-email">Email</label>
+                  </Tooltip>
+                  <input id="jira-email" type="text" value={jiraEmail} onChange={(e) => setJiraEmail(e.target.value)} />
+                </div>
+                <div className="input-group">
+                  <Tooltip content="API token from Atlassian (leave blank to use server .env)">
+                  <label htmlFor="jira-token">API token</label>
+                  </Tooltip>
+                  <input id="jira-token" type="password" value={jiraToken} onChange={(e) => setJiraToken(e.target.value)} />
+                </div>
+                <div className="input-group">
+                  <Tooltip content="Jira project key (e.g. PROJ)">
+                  <label htmlFor="jira-project">Project key</label>
+                  </Tooltip>
+                  <input id="jira-project" type="text" value={jiraProject} onChange={(e) => setJiraProject(e.target.value)} placeholder="PROJ" />
+                </div>
+                <div className="input-group">
+                  <Tooltip content="Board ID from URL .../boards/42">
+                  <label htmlFor="jira-board">Board ID (optional)</label>
+                  </Tooltip>
+                  <input id="jira-board" type="text" value={jiraBoard} onChange={(e) => setJiraBoard(e.target.value)} placeholder="e.g. 42" />
+                </div>
+                <div className="input-group">
+                  <Tooltip content="Sprint ID for backlog assignment">
+                  <label htmlFor="jira-sprint">Sprint ID (optional)</label>
+                  </Tooltip>
+                  <input id="jira-sprint" type="text" value={jiraSprint} onChange={(e) => setJiraSprint(e.target.value)} placeholder="e.g. 123" />
+                </div>
+                <Tooltip content="Create or use active sprint if none specified">
+                <label className="checkbox-row">
+                  <input type="checkbox" checked={jiraAutoSprint} onChange={(e) => setJiraAutoSprint(e.target.checked)} />
+                  Auto-create sprint if none exists
+                </label>
+                </Tooltip>
+                <Tooltip content="Create Jira issues for selected tasks">
+                <button className="btn btn-primary" onClick={handleExportJira} disabled={!!loading}>
+                  {loading === 'jira' ? <Loader2 size={16} className="spinner" /> : <Send size={16} />}
+                  Export to Jira
+                </button>
+                </Tooltip>
+              </div>
+              <div className="export-panel">
+                <div className="export-panel-header">
+                  <Github size={18} />
+                  GitHub
+                </div>
+                <div className="input-group">
+                  <Tooltip content="Repository as owner/name (e.g. owner/repo)">
+                  <label htmlFor="gh-repo">Repo (owner/name)</label>
+                  </Tooltip>
+                  <input id="gh-repo" type="text" value={ghRepo} onChange={(e) => setGhRepo(e.target.value)} placeholder="owner/repo" />
+                </div>
+                <div className="input-group">
+                  <Tooltip content="Personal access token for GitHub API">
+                  <label htmlFor="gh-token">Token</label>
+                  </Tooltip>
+                  <input id="gh-token" type="password" value={ghToken} onChange={(e) => setGhToken(e.target.value)} />
+                </div>
+                <Tooltip content="Create GitHub issues for selected tasks">
+                <button className="btn btn-primary" onClick={handleExportGitHub} disabled={!!loading}>
+                  {loading === 'github' ? <Loader2 size={16} className="spinner" /> : <Send size={16} />}
+                  Export to GitHub
+                </button>
+                </Tooltip>
+              </div>
+              </div>
+            </section>
+          )}
+
+          {!tasks.length && docId && (
+          <p style={{ color: 'var(--text-secondary)', fontSize: 'var(--text-sm)' }}>
+            Process a document, then run <strong>Extract tasks</strong>.
+          </p>
+          )}
+          </>
+          )}
+        </div>
+      </main>
+    </div>
+  )
+}
+
+function AuditPage({
+  entries,
+  loading,
+  onRefresh,
+}: {
+  entries: Array<{ timestamp: string; user_id: string; action: string; resource_accessed: string; source_ip: string; details: string }>
+  loading: boolean
+  onRefresh: () => void
+}) {
+  const formatDate = (ts: string) => {
+    try {
+      return new Date(ts).toLocaleString()
+    } catch {
+      return ts
+    }
+  }
+  return (
+    <>
+      <header className="main-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 'var(--space-4)' }}>
+        <div>
+          <h1>Audit trail</h1>
+          <p>Tamper-evident log of access and actions (§ 2.2.1)</p>
+        </div>
+        <button className="btn btn-secondary" onClick={onRefresh} disabled={loading}>
+          {loading ? <Loader2 size={16} className="spinner" /> : <ShieldCheck size={16} />}
+          Refresh
+        </button>
+      </header>
+      {loading && entries.length === 0 ? (
+        <div className="alert alert-info">
+          <Loader2 size={18} className="spinner" />
+          Loading audit logs…
+        </div>
+      ) : entries.length === 0 ? (
+        <div className="card">
+          <p style={{ color: 'var(--text-secondary)', margin: 0 }}>No audit entries yet.</p>
+        </div>
+      ) : (
+        <div className="audit-list">
+          {entries.map((e, i) => (
+            <div key={i} className="audit-card">
+              <div className="audit-card-header">
+                <span className="audit-badge">{e.action}</span>
+                <span className="audit-date">{formatDate(e.timestamp)}</span>
+              </div>
+              <div className="audit-card-body">
+                <div className="audit-meta">User: <strong>{e.user_id}</strong> · Resource: <code>{e.resource_accessed}</code></div>
+                {e.details && <div className="audit-details">{e.details}</div>}
+                <div className="audit-meta">IP: {e.source_ip}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </>
+  )
+}
+
+function HistoryPage({
+  entries,
+  loading,
+  onRefresh,
+}: {
+  entries: Array<{ timestamp: string; target: string; project_key?: string; repo?: string; keys?: string[]; urls?: string[]; task_count: number; jira_url?: string }>
+  loading: boolean
+  onRefresh: () => void
+}) {
+  const formatDate = (ts: string) => {
+    try {
+      const d = new Date(ts)
+      return d.toLocaleString()
+    } catch {
+      return ts
+    }
+  }
+
+  return (
+    <>
+      <header className="main-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 'var(--space-4)' }}>
+        <div>
+          <h1>Export history</h1>
+          <p>History of created Jira tickets and GitHub issues</p>
+        </div>
+        <button className="btn btn-secondary" onClick={onRefresh} disabled={loading}>
+          {loading ? <Loader2 size={16} className="spinner" /> : <History size={16} />}
+          Refresh
+        </button>
+      </header>
+      {loading && entries.length === 0 ? (
+        <div className="alert alert-info">
+          <Loader2 size={18} className="spinner" />
+          Loading history…
+        </div>
+      ) : entries.length === 0 ? (
+        <div className="card">
+          <p style={{ color: 'var(--text-secondary)', margin: 0 }}>No export history yet. Create Jira tickets or GitHub issues to see them here.</p>
+        </div>
+      ) : (
+        <div className="history-list">
+          {entries.map((e, i) => (
+            <div key={i} className="history-card">
+              <div className="history-card-header">
+                <span className={`history-badge ${e.target}`}>
+                  {e.target === 'jira' ? <FileCode size={14} /> : <Github size={14} />}
+                  {e.target === 'jira' ? 'Jira' : 'GitHub'}
+                </span>
+                <span className="history-date">{formatDate(e.timestamp)}</span>
+              </div>
+              <div className="history-card-body">
+                {e.target === 'jira' && (
+                  <>
+                    <div className="history-meta">Project: <strong>{e.project_key}</strong> · {e.task_count} task(s)</div>
+                    <div className="history-keys">
+                      {e.keys?.map((k) => (
+                        <a
+                          key={k}
+                          href={`${e.jira_url || 'https://your-domain.atlassian.net'}/browse/${k}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="history-link"
+                        >
+                          {k}
+                          <ExternalLink size={12} />
+                        </a>
+                      ))}
+                    </div>
+                  </>
+                )}
+                {e.target === 'github' && (
+                  <>
+                    <div className="history-meta">Repo: <strong>{e.repo}</strong> · {e.task_count} task(s)</div>
+                    <div className="history-urls">
+                      {e.urls?.slice(0, 5).map((u, j) => (
+                        <a key={j} href={u} target="_blank" rel="noopener noreferrer" className="history-link">
+                          Issue {j + 1}
+                          <ExternalLink size={12} />
+                        </a>
+                      ))}
+                      {e.urls && e.urls.length > 5 && (
+                        <span className="history-more">+{e.urls.length - 5} more</span>
+                      )}
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </>
+  )
+}
+
+function TaskCard({
+  task,
+  selected,
+  onToggle,
+  onUpdate,
+  onCopyMarkdown,
+}: {
+  task: ExtractionTask
+  selected: boolean
+  onToggle: () => void
+  onUpdate: (updates: Partial<ExtractionTask>) => void
+  onCopyMarkdown?: () => void
+}) {
+  const ac = task.acceptance_criteria ?? []
+  const subs = task.subtasks ?? []
+  const [expanded, setExpanded] = useState(false)
+  const [editing, setEditing] = useState(false)
+  const [editForm, setEditForm] = useState({
+    title: task.title ?? '',
+    description: task.description ?? '',
+    priority: task.priority ?? 'Medium',
+    responsible_role: task.responsible_role ?? '',
+    acceptance_criteria: ac.join('\n'),
+    subtasks: subs.map((s) => `${s?.title ?? ''} | ${s?.description ?? ''}`).join('\n'),
+  })
+
+  const handleSave = () => {
+    const ac = editForm.acceptance_criteria
+      .split('\n')
+      .map((s) => s.trim())
+      .filter(Boolean)
+    const sub = editForm.subtasks
+      .split('\n')
+      .map((line) => {
+        const trimmed = line.trim()
+        if (!trimmed) return { title: '', description: '' }
+        if (trimmed.includes(' | ')) {
+          const [t, d] = trimmed.split(' | ', 2)
+          return { title: t.trim(), description: d.trim() }
+        }
+        return { title: trimmed, description: '' }
+      })
+      .filter((s) => s.title)
+    onUpdate({
+      title: editForm.title,
+      description: editForm.description,
+      priority: editForm.priority as ExtractionTask['priority'],
+      responsible_role: editForm.responsible_role,
+      acceptance_criteria: ac,
+      subtasks: sub,
+    })
+    setEditing(false)
+  }
+
+  return (
+    <div className={`task-card ${expanded ? 'expanded' : ''}`}>
+      <div
+        className="task-card-header"
+        onClick={() => setExpanded(!expanded)}
+        role="button"
+        tabIndex={0}
+        onKeyDown={(e) => e.key === 'Enter' && setExpanded(!expanded)}
+        aria-expanded={expanded}
+        aria-label={`${task.title}, ${task.priority} priority`}
+      >
+        <Tooltip content={selected ? 'Exclude from export' : 'Include in export'}>
+        <input
+          type="checkbox"
+          className="task-card-checkbox"
+          checked={selected}
+          onChange={(e) => {
+            e.stopPropagation()
+            onToggle()
+          }}
+          onClick={(e) => e.stopPropagation()}
+          aria-label={`Select ${task.title}`}
+        />
+        </Tooltip>
+        <span className="task-card-title">{task.title}</span>
+        {task.confidence != null && (
+          <span className="task-card-confidence" title={`Confidence: ${task.confidence}%`}>
+            {task.confidence}%
+          </span>
+        )}
+        <span className={`task-card-badge ${task.priority}`}>{task.priority}</span>
+        <ChevronDown size={18} className="task-card-chevron" />
+      </div>
+      {expanded && (
+        <div className="task-card-body">
+          <div className="task-card-desc">{task.description}</div>
+          <div className="task-card-source">
+            <strong>Source citation:</strong> {task.source_citation}
+          </div>
+          {(ac.length > 0) && (
+            <>
+              <strong style={{ fontSize: 'var(--text-xs)' }}>Acceptance criteria</strong>
+              <ul className="task-card-list">
+                {ac.map((c, i) => (
+                  <li key={i}>{c}</li>
+                ))}
+              </ul>
+            </>
+          )}
+          {(subs.length > 0) && (
+            <>
+              <strong style={{ fontSize: 'var(--text-xs)' }}>Subtasks</strong>
+              <ul className="task-card-list">
+                {subs.map((s, i) => (
+                  <li key={i}>
+                    <strong>{s?.title ?? ''}</strong>
+                    {(s?.description) && ` — ${s.description}`}
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
+          <div className="task-card-meta">Role: {task.responsible_role}</div>
+
+          {!editing ? (
+            <div className="task-card-actions">
+            {onCopyMarkdown && (
+              <Tooltip content="Copy as Markdown">
+                <button type="button" className="btn btn-ghost btn-sm" onClick={(e) => { e.stopPropagation(); onCopyMarkdown(); }}>
+                  <Copy size={14} />
+                  Copy Markdown
+                </button>
+              </Tooltip>
+            )}
+            <Tooltip content="Edit task details before exporting">
+            <button
+              className="btn btn-secondary btn-sm"
+              style={{ marginTop: 'var(--space-3)' }}
+              onClick={() => setEditing(true)}
+            >
+              <Pencil size={14} />
+              Edit task
+            </button>
+            </Tooltip>
+            </div>
+          ) : (
+            <div className="edit-form">
+              <div className="input-group">
+                <label>Title</label>
+                <input value={editForm.title} onChange={(e) => setEditForm((f) => ({ ...f, title: e.target.value }))} />
+              </div>
+              <div className="input-group">
+                <label>Description</label>
+                <textarea value={editForm.description} onChange={(e) => setEditForm((f) => ({ ...f, description: e.target.value }))} rows={3} />
+              </div>
+              <div className="input-group">
+                <label>Priority</label>
+                <select
+                  value={editForm.priority}
+                  onChange={(e) => setEditForm((f) => ({ ...f, priority: e.target.value as ExtractionTask['priority'] }))}
+                >
+                  <option value="High">High</option>
+                  <option value="Medium">Medium</option>
+                  <option value="Low">Low</option>
+                </select>
+              </div>
+              <div className="input-group">
+                <label>Responsible role</label>
+                <input value={editForm.responsible_role} onChange={(e) => setEditForm((f) => ({ ...f, responsible_role: e.target.value }))} />
+              </div>
+              <div className="input-group">
+                <label>Acceptance criteria (one per line)</label>
+                <textarea value={editForm.acceptance_criteria} onChange={(e) => setEditForm((f) => ({ ...f, acceptance_criteria: e.target.value }))} rows={2} />
+              </div>
+              <div className="input-group">
+                <label>Subtasks (Title | Description per line)</label>
+                <textarea value={editForm.subtasks} onChange={(e) => setEditForm((f) => ({ ...f, subtasks: e.target.value }))} rows={2} />
+              </div>
+              <div className="edit-form-actions">
+                <button className="btn btn-primary btn-sm" onClick={handleSave}>
+                  <Check size={14} />
+                  Save
+                </button>
+                <button className="btn btn-ghost btn-sm" onClick={() => setEditing(false)}>
+                  <X size={14} />
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}

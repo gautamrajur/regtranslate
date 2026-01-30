@@ -11,3 +11,4 @@ dist/
 build/
 streamlit_app_log.txt
 audit_logs/
+export_history/
