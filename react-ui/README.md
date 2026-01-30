@@ -2,6 +2,17 @@
 
 React frontend for RegTranslate — regulatory PDF → developer tasks → Jira / GitHub.
 
+## Features
+
+- **Hero page** — Landing with problem statement, FAQ, Get started
+- **Dashboard** — Upload PDF, extract tasks (RAG + LLM), review, export to Jira/GitHub
+- **Batch PDF processing** — Multiple files at once
+- **Task management** — Search, filter, bulk select, manual task creation with templates
+- **Export** — Jira, GitHub, CSV; saved presets
+- **Dark mode** — Theme toggle
+- **Audit trail** — View tamper-evident logs (§ 2.2.1)
+- **Keyboard shortcuts** — Ctrl+Shift+E: Extract, Ctrl+Shift+S: Export Jira
+
 ## Prerequisites
 
 - Node.js 18+

@@ -9,7 +9,20 @@ AI-powered tool that converts regulatory documents (HIPAA, GDPR, ADA/WCAG, FDA 2
 - **Embeddings:** HuggingFace `sentence-transformers` (`all-MiniLM-L6-v2`), local  
 - **Vector DB:** ChromaDB (local, persistent)  
 - **Document processing:** pypdf  
-- **Frontend:** Streamlit  
+- **Frontend:** Streamlit (legacy) + React (Vite + TypeScript)
+
+## React UI Features
+
+- **Hero page** — Problem statement, FAQ, Get started CTA
+- **Dashboard** — Upload PDF → Extract tasks → Review → Export to Jira/GitHub
+- **Batch processing** — Multiple PDFs at once
+- **Task search/filter** — By priority, confidence
+- **Bulk select** — Select all, deselect all, high priority only
+- **Manual tasks** — Add tasks with templates (Security review, Accessibility audit, Audit logging)
+- **Export** — Jira, GitHub, CSV; saved presets
+- **Dark mode** — Theme toggle
+- **Audit trail** — Tamper-evident log viewer (§ 2.2.1)
+- **Keyboard shortcuts** — Ctrl+Shift+E: Extract, Ctrl+Shift+S: Export Jira
 
 ## Quick Start
 
@@ -43,15 +56,16 @@ streamlit run frontend/streamlit_app.py
 - You should see chunk count and sample query results.  
 - The first run downloads the `all-MiniLM-L6-v2` embedding model (~90MB).
 
-**Option B: FastAPI + React UI**
+**Option B: FastAPI + React UI (recommended)**
 
 ```bash
 # Terminal 1: Start the API
 uvicorn app.main:app --reload
 
-# Terminal 2: Start the React UI (on branch feature/react-ui)
+# Terminal 2: Start the React UI
 cd react-ui && npm install && npm run dev
-# Open http://localhost:5173 — upload PDF, extract tasks, edit, export to Jira/GitHub
+# Open http://localhost:5173 — hero page → Get started → dashboard
+# Upload PDF, extract tasks, edit, export to Jira/GitHub
 ```
 
 **Option C: FastAPI (curl)**
@@ -91,7 +105,7 @@ regtranslate/
 │   │   └── ...
 │   └── prompts/extraction.py
 ├── frontend/streamlit_app.py
-├── react-ui/                 # React UI (feature/react-ui)
+├── react-ui/                 # React UI (hero page, dashboard)
 ├── tests/test_pipeline.py
 ├── requirements.txt
 └── .env.example
@@ -104,7 +118,7 @@ regtranslate/
 3. **ChromaDB** → one collection per document, store chunks + metadata (page, section, regulation).  
 4. **RAG + LLM** → Groq (`llama-3.3-70b-versatile`) via official SDK; optional Gemini fallback.  
 5. **Deduplication** → semantic similarity (embeddings), merge clusters into tasks with `also_satisfies`.  
-6. **Export** → Jira (basic_auth) or GitHub Issues (PyGithub).
+6. **Export** → Jira (basic_auth) or GitHub Issues (PyGithub). CSV export, saved presets.
 
 7. **Audit (§ 2.2.2)** — ePHI audit logs: tamper-evident (hash chain), 6-year retention, automated alerts for suspicious patterns, weekly high-risk review and monthly comprehensive review with documented findings and remediation.  
 
