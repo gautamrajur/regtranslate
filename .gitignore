@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+chroma_db/
+*.pdf
+.pytest_cache/
+.mypy_cache/
+*.egg-info/
+dist/
+build/
+streamlit_app_log.txt
+audit_logs/
