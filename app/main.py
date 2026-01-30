@@ -45,6 +45,8 @@ class ExtractRequest(BaseModel):
     regulation_name: str
     dedupe: bool = True
     return_coverage: bool = False
+    product_context: str | None = None
+    rag_query: str | None = None
 
 
 class ExtractResponse(BaseModel):
@@ -134,11 +136,17 @@ def extract_tasks_endpoint(req: ExtractRequest) -> ExtractResponse:
     Run RAG + LLM extraction on a processed document.
     Optionally deduplicate across regulations. Returns tasks for review and export.
     Set return_coverage=True for Quick Test: pages/sections in RAG chunks (Parts I–IV, Section 4).
+    product_context + rag_query enable product-focused extraction (Chat flow).
     """
     from app.services import deduplication
 
     try:
-        raw, coverage = task_generator.extract_tasks(req.doc_id, req.regulation_name)
+        raw, coverage = task_generator.extract_tasks(
+            req.doc_id,
+            req.regulation_name,
+            product_context=req.product_context,
+            rag_query=req.rag_query or task_generator.RAG_QUERY,
+        )
         tasks = deduplication.deduplicate(raw) if req.dedupe and raw else raw
     except ValueError as e:
         raise HTTPException(422, str(e))
@@ -148,6 +156,119 @@ def extract_tasks_endpoint(req: ExtractRequest) -> ExtractResponse:
         tasks=[t.model_dump() for t in tasks],
         coverage=coverage if req.return_coverage else None,
     )
+
+
+# --- Export to Jira / GitHub ---
+
+
+class JiraExportRequest(BaseModel):
+    tasks: list[dict]
+    project_key: str
+    url: str | None = None
+    email: str | None = None
+    api_token: str | None = None
+    sprint_id: int | None = None
+    board_id: int | None = None
+    auto_create_sprint: bool = False
+    assignee_overrides: dict[str, str] | None = None
+
+
+class JiraExportResponse(BaseModel):
+    keys: list[str]
+
+
+class GitHubExportRequest(BaseModel):
+    tasks: list[dict]
+    repo: str  # owner/repo
+    token: str
+
+
+class GitHubExportResponse(BaseModel):
+    urls: list[str]
+
+
+@app.post("/export/jira", response_model=JiraExportResponse)
+def export_to_jira_endpoint(req: JiraExportRequest) -> JiraExportResponse:
+    """Export selected tasks to Jira. Requires project_key and credentials."""
+    from app.models.schemas import ExtractionSubtask, ExtractionTask
+    from app.services import jira_export
+
+    tasks = []
+    for t in req.tasks:
+        subtasks = [
+            ExtractionSubtask(title=s.get("title", ""), description=s.get("description", ""))
+            for s in (t.get("subtasks") or [])
+        ]
+        tasks.append(
+            ExtractionTask(
+                task_id=t.get("task_id", ""),
+                title=t.get("title", ""),
+                description=t.get("description", ""),
+                priority=t.get("priority", "Medium"),
+                penalty_risk=t.get("penalty_risk", ""),
+                source_citation=t.get("source_citation", ""),
+                source_text=t.get("source_text", ""),
+                responsible_role=t.get("responsible_role", "Backend Engineer"),
+                acceptance_criteria=t.get("acceptance_criteria", []),
+                also_satisfies=t.get("also_satisfies", []),
+                confidence=t.get("confidence"),
+                subtasks=subtasks,
+            )
+        )
+    try:
+        keys = jira_export.export_to_jira(
+            tasks,
+            req.project_key,
+            url=req.url,
+            email=req.email,
+            api_token=req.api_token,
+            sprint_id=req.sprint_id,
+            board_id=req.board_id,
+            auto_create_sprint=req.auto_create_sprint,
+            assignee_overrides=req.assignee_overrides,
+        )
+        return JiraExportResponse(keys=keys)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    except Exception as e:
+        raise HTTPException(500, f"Jira export failed: {e}")
+
+
+@app.post("/export/github", response_model=GitHubExportResponse)
+def export_to_github_endpoint(req: GitHubExportRequest) -> GitHubExportResponse:
+    """Export selected tasks to GitHub Issues. Requires repo (owner/name) and token."""
+    from app.models.schemas import ExtractionSubtask, ExtractionTask
+    from app.services import github_export
+
+    tasks = []
+    for t in req.tasks:
+        subtasks = [
+            ExtractionSubtask(title=s.get("title", ""), description=s.get("description", ""))
+            for s in (t.get("subtasks") or [])
+        ]
+        tasks.append(
+            ExtractionTask(
+                task_id=t.get("task_id", ""),
+                title=t.get("title", ""),
+                description=t.get("description", ""),
+                priority=t.get("priority", "Medium"),
+                penalty_risk=t.get("penalty_risk", ""),
+                source_citation=t.get("source_citation", ""),
+                source_text=t.get("source_text", ""),
+                responsible_role=t.get("responsible_role", "Backend Engineer"),
+                acceptance_criteria=t.get("acceptance_criteria", []),
+                also_satisfies=t.get("also_satisfies", []),
+                confidence=t.get("confidence"),
+                subtasks=subtasks,
+            )
+        )
+    try:
+        urls = github_export.export_to_github(tasks, req.repo, req.token)
+        return GitHubExportResponse(urls=urls)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    except Exception as e:
+        raise HTTPException(500, f"GitHub export failed: {e}")
 
 
 # --- § 2.2.1 Audit logging; § 2.2.2 = review/alerting ---

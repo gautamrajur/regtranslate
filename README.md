@@ -43,7 +43,18 @@ streamlit run frontend/streamlit_app.py
 - You should see chunk count and sample query results.  
 - The first run downloads the `all-MiniLM-L6-v2` embedding model (~90MB).
 
-**Option B: FastAPI**
+**Option B: FastAPI + React UI**
+
+```bash
+# Terminal 1: Start the API
+uvicorn app.main:app --reload
+
+# Terminal 2: Start the React UI (on branch feature/react-ui)
+cd react-ui && npm install && npm run dev
+# Open http://localhost:5173 — upload PDF, extract tasks, edit, export to Jira/GitHub
+```
+
+**Option C: FastAPI (curl)**
 
 ```bash
 uvicorn app.main:app --reload
@@ -80,6 +91,7 @@ regtranslate/
 │   │   └── ...
 │   └── prompts/extraction.py
 ├── frontend/streamlit_app.py
+├── react-ui/                 # React UI (feature/react-ui)
 ├── tests/test_pipeline.py
 ├── requirements.txt
 └── .env.example
