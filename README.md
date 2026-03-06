@@ -4,9 +4,19 @@
 
 ---
 
-## Demo
+## Screenshots
 
-![Demo](assets/demo.mp4)
+| Upload | Extract |
+|---|---|
+| ![Upload](assets/screenshot-upload.png) | ![Extract](assets/screenshot-extract.png) |
+
+| Task Review | Jira Export |
+|---|---|
+| ![Tasks](assets/screenshot-tasks.png) | ![Jira](assets/screenshot-jira.png) |
+
+![Compliance Q&A](assets/screenshot-qa.png)
+
+> Full demo video available in the [Releases](https://github.com/gautamrajur/regtranslate/releases/tag/v1.0.0-demo) section.
 
 ---
 
