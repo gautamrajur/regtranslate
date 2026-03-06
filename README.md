@@ -108,4 +108,4 @@ regtranslate/
 
 ## License
 
-MIT
+All Rights Reserved. Proprietary — see [LICENSE](LICENSE) for full terms.
